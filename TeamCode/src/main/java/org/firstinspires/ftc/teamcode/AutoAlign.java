@@ -14,12 +14,6 @@ import java.util.List;
 @TeleOp(name="AprilTag Align TeleOp", group="TeleOp")
 public class AutoAlign extends LinearOpMode {
 
-    // Robot and vision constants
-    private static final double TAG_HEIGHT = 60.0;    // inches (AprilTag height)
-    private static final double CAM_HEIGHT = 20.0;    // inches (camera height)
-    private static final double CAM_ANGLE  = 25.0;    // degrees (camera tilt angle)
-    private static final int TARGET_ID = 20;          // AprilTag ID to align to
-
     private DcMotor leftFront, leftBack, rightFront, rightBack;
     private Limelight3A limelight;
 
@@ -31,57 +25,49 @@ public class AutoAlign extends LinearOpMode {
         rightFront = hardwareMap.get(DcMotor.class, "rightFront");
         rightBack  = hardwareMap.get(DcMotor.class, "rightBack");
 
-        // Configure motor directions (adjust as needed for robot configuration)
+        // Motor directions
         leftFront.setDirection(DcMotorSimple.Direction.FORWARD);
         leftBack.setDirection(DcMotorSimple.Direction.FORWARD);
         rightFront.setDirection(DcMotorSimple.Direction.REVERSE);
         rightBack.setDirection(DcMotorSimple.Direction.REVERSE);
 
-        // Use encoders for more consistent control
+        // Encoders + braking
         leftFront.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
         leftBack.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
         rightFront.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
         rightBack.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
 
-        // Brake mode for precise stopping
         leftFront.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         leftBack.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         rightFront.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         rightBack.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
 
-        // Initialize Limelight 3A
-        limelight = hardwareMap.get(Limelight3A.class, "limelight");
-        telemetry.setMsTransmissionInterval(11); // fastest telemetry rate:contentReference[oaicite:0]{index=0}
-
-        // Set Limelight to AprilTag pipeline (index 4) and fast polling
-        limelight.pipelineSwitch(4);  // switch to pipeline 4 (AprilTags):contentReference[oaicite:1]{index=1}
-        limelight.setPollRateHz(100); // set high polling rate (100Hz):contentReference[oaicite:2]{index=2}
+        // Limelight setup
+        limelight = hardwareMap.get(Limelight3A.class, LimelightConfig.LIMELIGHT_NAME);
+        telemetry.setMsTransmissionInterval(11);
+        limelight.pipelineSwitch(5);
+        limelight.setPollRateHz(100);
 
         waitForStart();
-        limelight.start(); // begin polling Limelight data
+        limelight.start();
 
-        boolean aligning = false;        // are we aligning to the tag?
-        boolean xButtonPrev = false;     // previous state of gamepad X button
+        boolean aligning = false;
+        boolean xButtonPrev = false;
 
         while (opModeIsActive()) {
-            // Toggle auto-align mode when X is pressed
-            if (gamepad1.x && !xButtonPrev) {
-                aligning = true;
-            }
+            if (gamepad1.x && !xButtonPrev) aligning = true;
             xButtonPrev = gamepad1.x;
 
-            // Retrieve latest Limelight result
             LLResult result = limelight.getLatestResult();
             double tx = 0, ty = 0;
             boolean targetVisible = false;
 
             if (result != null && result.isValid()) {
-                // Check all AprilTag detections for target ID
-                List<FiducialResult> fiducials = result.getFiducialResults(); // list of AprilTag results:contentReference[oaicite:3]{index=3}
+                List<FiducialResult> fiducials = result.getFiducialResults();
                 for (FiducialResult fid : fiducials) {
-                    if (fid.getFiducialId() == TARGET_ID) { // found our tag ID:contentReference[oaicite:4]{index=4}
-                        tx = fid.getTargetXDegrees(); // horizontal offset to target (deg):contentReference[oaicite:5]{index=5}
-                        ty = fid.getTargetYDegrees(); // vertical offset to target (deg)
+                    if (fid.getFiducialId() == LimelightConfig.TARGET_APRILTAG_ID) {
+                        tx = fid.getTargetXDegrees();
+                        ty = fid.getTargetYDegrees();
                         targetVisible = true;
                         break;
                     }
@@ -90,23 +76,21 @@ public class AutoAlign extends LinearOpMode {
 
             if (aligning) {
                 if (!targetVisible) {
-                    // Rotate robot until tag is found
-                    double spinPower = 0.3;
+                    double spinPower = LimelightConfig.SPIN_SEARCH_POWER;
                     leftFront.setPower(spinPower);
                     leftBack.setPower(spinPower);
                     rightFront.setPower(-spinPower);
                     rightBack.setPower(-spinPower);
                 } else {
-                    // Align to tag using proportional control on tx
-                    double kP = 0.02;
-                    double turn = Range.clip(kP * tx, -0.4, 0.4);
+                    double turn = Range.clip(LimelightConfig.KP_TURN * tx,
+                            -LimelightConfig.MAX_TURN_POWER,
+                            LimelightConfig.MAX_TURN_POWER);
                     leftFront.setPower(turn);
                     leftBack.setPower(turn);
                     rightFront.setPower(-turn);
                     rightBack.setPower(-turn);
 
-                    // Stop when roughly centered on the tag
-                    if (Math.abs(tx) < 1.0) {
+                    if (Math.abs(tx) < LimelightConfig.TURN_DEADZONE_DEGREES) {
                         leftFront.setPower(0);
                         leftBack.setPower(0);
                         rightFront.setPower(0);
@@ -115,34 +99,28 @@ public class AutoAlign extends LinearOpMode {
                     }
                 }
             } else {
-                // Standard mecanum drive control (no alignment)
-                double drive  = -gamepad1.left_stick_y; // forward/back
-                double strafe =  gamepad1.left_stick_x; // left/right
-                double rotate =  gamepad1.right_stick_x; // rotation
+                double drive  = -gamepad1.left_stick_y;
+                double strafe =  gamepad1.left_stick_x;
+                double rotate =  gamepad1.right_stick_x;
+
                 double fl = drive + strafe + rotate;
                 double bl = drive - strafe + rotate;
                 double fr = drive - strafe - rotate;
                 double br = drive + strafe - rotate;
-                // Normalize wheel speeds
+
                 double max = Math.max(1.0, Math.max(Math.abs(fl),
-                        Math.max(Math.abs(bl),
-                                Math.max(Math.abs(fr), Math.abs(br)))));
-                fl /= max;
-                bl /= max;
-                fr /= max;
-                br /= max;
-                leftFront.setPower(fl);
-                leftBack.setPower(bl);
-                rightFront.setPower(fr);
-                rightBack.setPower(br);
+                        Math.max(Math.abs(bl), Math.max(Math.abs(fr), Math.abs(br)))));
+                leftFront.setPower(fl / max);
+                leftBack.setPower(bl / max);
+                rightFront.setPower(fr / max);
+                rightBack.setPower(br / max);
             }
 
-            // Display distance to tag if visible
             if (targetVisible) {
-                double angleToTarget = CAM_ANGLE + ty;
-                double angleRad = Math.toRadians(angleToTarget);
-                double distanceInches = (TAG_HEIGHT - CAM_HEIGHT) / Math.tan(angleRad); // distance formula:contentReference[oaicite:6]{index=6}
-                telemetry.addData("Distance (in)", distanceInches);
+                double angleToTarget = LimelightConfig.CAMERA_TILT_DEGREES + ty;
+                double distance = (LimelightConfig.TAG_HEIGHT_INCHES - LimelightConfig.CAMERA_HEIGHT_INCHES)
+                        / Math.tan(Math.toRadians(angleToTarget));
+                telemetry.addData("Distance (in)", distance);
             } else {
                 telemetry.addData("Distance (in)", "Unknown");
             }
